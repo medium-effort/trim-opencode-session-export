@@ -2,7 +2,7 @@
 """OpenCode Session Processing & Bundling Orchestrator.
 
 This script takes an exported OpenCode session JSON file and:
-1. Creates a target folder named after the session JSON (or user-specified).
+1. Creates a target folder in extractions/ named after the session JSON (or user-specified).
 2. Generates a compact Markdown review transcript of the main session using `trimmer.py`.
 3. Discovers all subtask sessions and exports them via `export_task_sessions.py` into a temporary folder.
 4. Trims each subtask session into a Markdown transcript inside a `subtasks/` subdirectory.
@@ -21,6 +21,8 @@ import typer
 
 from export_task_sessions import export_all_tasks, find_task_calls
 from trimmer import generate_review_transcript
+
+DEFAULT_EXTRACTIONS_DIR = Path(__file__).resolve().parent / "extractions"
 
 app = typer.Typer(
     help="Process an exported OpenCode session: trim main session and export & trim all subtasks."
@@ -41,7 +43,7 @@ def main(
         None,
         "-o",
         "--output-dir",
-        help="Target output directory (defaults to session JSON stem).",
+        help="Target output directory (defaults to extractions/<session_json_stem>).",
     ),
     opencode_bin: str = typer.Option(
         "opencode",
@@ -88,7 +90,13 @@ def main(
     ),
 ) -> None:
     """Process an exported OpenCode session transcript into a bundled review structure."""
-    target_root: Path = output_dir or Path(session_json.stem)
+    if output_dir:
+        if output_dir.resolve() == DEFAULT_EXTRACTIONS_DIR.resolve():
+            target_root = DEFAULT_EXTRACTIONS_DIR / session_json.stem
+        else:
+            target_root = output_dir
+    else:
+        target_root = DEFAULT_EXTRACTIONS_DIR / session_json.stem
 
     try:
         with open(session_json, "r", encoding="utf-8") as f:

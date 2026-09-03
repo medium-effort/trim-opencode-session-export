@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Optional
 import typer
 
+DEFAULT_EXTRACTIONS_DIR = Path(__file__).resolve().parent / "extractions"
+
 app = typer.Typer(
     help="Trim OpenCode session JSON export into a compact Markdown review transcript."
 )
@@ -122,7 +124,7 @@ def main(
     ),
     output_md_path: Optional[Path] = typer.Argument(
         None,
-        help="Path to write markdown review transcript. Defaults to <raw_json_stem>.md.",
+        help="Path to write markdown review transcript. Defaults to extractions/<raw_json_stem>.md.",
     ),
     max_output_length: int = typer.Option(
         500,
@@ -141,7 +143,13 @@ def main(
         help="Whether to truncate apply_patch tool inputs (defaults to True or TRUNCATE_APPLY_PATCH_INPUT env var).",
     ),
 ) -> None:
-    target_out = output_md_path or Path(f"{raw_json_path.stem}.md")
+    if output_md_path:
+        if output_md_path.is_dir() or output_md_path.resolve() == DEFAULT_EXTRACTIONS_DIR.resolve():
+            target_out = output_md_path / f"{raw_json_path.stem}.md"
+        else:
+            target_out = output_md_path
+    else:
+        target_out = DEFAULT_EXTRACTIONS_DIR / f"{raw_json_path.stem}.md"
     result = generate_review_transcript(
         raw_json_path,
         target_out,

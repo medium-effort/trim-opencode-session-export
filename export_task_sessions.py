@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import typer
 
+DEFAULT_EXTRACTIONS_DIR = Path(__file__).resolve().parent / "extractions"
+
 app = typer.Typer(
     help="Extract task tool call session IDs from an OpenCode session JSON export and export them."
 )
@@ -270,7 +272,7 @@ def main(
         None,
         "-o",
         "--output-dir",
-        help="Directory where exported task session JSON files will be saved. Defaults to '<session_json_stem>_tasks'.",
+        help="Directory where exported task session JSON files will be saved. Defaults to 'extractions/<session_json_stem>_tasks'.",
     ),
     opencode_bin: str = typer.Option(
         "opencode",
@@ -290,7 +292,13 @@ def main(
         help="Overwrite existing JSON files in the output directory.",
     ),
 ) -> None:
-    target_output_dir = output_dir or Path(f"{session_json.stem}_tasks")
+    if output_dir:
+        if output_dir.resolve() == DEFAULT_EXTRACTIONS_DIR.resolve():
+            target_output_dir = DEFAULT_EXTRACTIONS_DIR / f"{session_json.stem}_tasks"
+        else:
+            target_output_dir = output_dir
+    else:
+        target_output_dir = DEFAULT_EXTRACTIONS_DIR / f"{session_json.stem}_tasks"
     _, success, fail = export_all_tasks(
         session_json_path=session_json,
         output_dir=target_output_dir,
