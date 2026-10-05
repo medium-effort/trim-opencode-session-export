@@ -12,6 +12,7 @@ This script takes an exported OpenCode session JSON file and:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -23,6 +24,18 @@ from export_task_sessions import export_all_tasks, find_task_calls
 from trimmer import generate_review_transcript
 
 DEFAULT_EXTRACTIONS_DIR = Path(__file__).resolve().parent / "extractions"
+
+
+def sanitize_name(name: str, max_length: int = 100, replace_spaces: bool = False) -> str:
+    """Sanitize title for filesystem naming, removing invalid characters."""
+    cleaned = re.sub(r'[<>:"/\\|?*]', '_', name)
+    if replace_spaces:
+        cleaned = re.sub(r'[\s_]+', '_', cleaned)
+    else:
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = cleaned.strip(' ._')
+    return cleaned[:max_length] if cleaned else "untitled"
+
 
 app = typer.Typer(
     help="Process an exported OpenCode session: trim main session and export & trim all subtasks."
@@ -90,14 +103,6 @@ def main(
     ),
 ) -> None:
     """Process an exported OpenCode session transcript into a bundled review structure."""
-    if output_dir:
-        if output_dir.resolve() == DEFAULT_EXTRACTIONS_DIR.resolve():
-            target_root = DEFAULT_EXTRACTIONS_DIR / session_json.stem
-        else:
-            target_root = output_dir
-    else:
-        target_root = DEFAULT_EXTRACTIONS_DIR / session_json.stem
-
     try:
         with open(session_json, "r", encoding="utf-8") as f:
             session_data = json.load(f)
@@ -110,10 +115,22 @@ def main(
 
     info = session_data.get("info") or {}
     title = info.get("title") or session_json.stem
-    model_id = (info.get("model") or {}).get("id", "unknown")
+    model_id = (info.get("model") or {}).get("id", "unknown") if isinstance(info.get("model"), dict) else (info.get("model") or "unknown")
     cost = info.get("cost") or 0.0
 
     task_calls = find_task_calls(session_data)
+
+    if output_dir:
+        if output_dir.resolve() == DEFAULT_EXTRACTIONS_DIR.resolve():
+            folder_name = sanitize_name(title, replace_spaces=False)
+            target_root = DEFAULT_EXTRACTIONS_DIR / folder_name
+        else:
+            target_root = output_dir
+    else:
+        folder_name = sanitize_name(title, replace_spaces=False)
+        target_root = DEFAULT_EXTRACTIONS_DIR / folder_name
+
+    pad_width = max(2, len(str(len(task_calls))))
 
     typer.secho("=" * 60, fg=typer.colors.CYAN)
     typer.secho(f"OpenCode Session Processor: {session_json.name}", fg=typer.colors.CYAN, bold=True)
@@ -128,8 +145,9 @@ def main(
         typer.secho(f"  1. Main review transcript -> {target_root / f'{session_json.stem}.md'}")
         typer.secho(f"  2. Subtasks folder -> {target_root / 'subtasks'}")
         for idx, task in enumerate(task_calls, 1):
-            desc = f" ({task.title})" if task.title else ""
-            typer.secho(f"     - [{idx}/{len(task_calls)}] {task.session_id}{desc} -> {target_root / 'subtasks' / f'{task.session_id}.md'}")
+            title_part = sanitize_name(task.title, max_length=60, replace_spaces=True) if task.title else task.session_id
+            subtask_md_name = f"{idx:0{pad_width}d}_{title_part}.md"
+            typer.secho(f"     - [{idx}/{len(task_calls)}] {task.session_id} -> {target_root / 'subtasks' / subtask_md_name}")
         typer.secho("\nDry run completed. No files were created.", fg=typer.colors.YELLOW)
         return
 
@@ -186,12 +204,21 @@ def main(
         )
 
         # Step 4: Trim each subtask session into subtasks/
-        typer.secho(f"\n[3/3] Trimming {len(exported_jsons)} subtask session(s) into subtasks/...", fg=typer.colors.GREEN)
+        typer.secho(f"\n[3/3] Trimming {len(task_calls)} subtask session(s) into subtasks/...", fg=typer.colors.GREEN)
 
-        for idx, task_json in enumerate(exported_jsons, 1):
-            subtask_md_path = subtasks_dir / f"{task_json.stem}.md"
+        for idx, task in enumerate(task_calls, 1):
+            task_json = temp_folder_path / f"{task.session_id}.json"
+            title_part = sanitize_name(task.title, max_length=60, replace_spaces=True) if task.title else task.session_id
+            subtask_md_name = f"{idx:0{pad_width}d}_{title_part}.md"
+            subtask_md_path = subtasks_dir / subtask_md_name
+
+            if not task_json.exists():
+                typer.secho(f"  [{idx}/{len(task_calls)}] [MISSING] {task.session_id} not exported", fg=typer.colors.RED, err=True)
+                failed_subtasks.append(task.session_id)
+                continue
+
             if subtask_md_path.exists() and not overwrite:
-                typer.secho(f"  [{idx}/{len(exported_jsons)}] [SKIPPED] {subtask_md_path.name} exists", fg=typer.colors.YELLOW)
+                typer.secho(f"  [{idx}/{len(task_calls)}] [SKIPPED] {subtask_md_name} exists", fg=typer.colors.YELLOW)
                 trimmed_subtasks.append(subtask_md_path)
                 continue
 
@@ -203,16 +230,10 @@ def main(
                     max_input_length=max_input_length,
                     truncate_apply_patch=truncate_apply_patch,
                 )
-                typer.secho(f"  [{idx}/{len(exported_jsons)}] [TRIMMED] -> subtasks/{subtask_md_path.name}", fg=typer.colors.GREEN)
+                typer.secho(f"  [{idx}/{len(task_calls)}] [TRIMMED] -> subtasks/{subtask_md_name}", fg=typer.colors.GREEN)
                 trimmed_subtasks.append(subtask_md_path)
             except Exception as err:
-                typer.secho(f"  [{idx}/{len(exported_jsons)}] [ERROR] Failed to trim {task_json.name}: {err}", fg=typer.colors.RED, err=True)
-                failed_subtasks.append(task_json.stem)
-
-        # Check if any task tool calls completely failed to export
-        exported_stems = {p.stem for p in exported_jsons}
-        for task in task_calls:
-            if task.session_id not in exported_stems:
+                typer.secho(f"  [{idx}/{len(task_calls)}] [ERROR] Failed to trim {subtask_md_name}: {err}", fg=typer.colors.RED, err=True)
                 failed_subtasks.append(task.session_id)
 
     finally:

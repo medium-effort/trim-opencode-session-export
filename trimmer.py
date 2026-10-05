@@ -50,35 +50,76 @@ def generate_review_transcript(
     with open(raw_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    info = data.get("info") or {}
+    session_id = info.get("id") or raw_path.stem
+    title = info.get("title") or "Session"
+    model_id = (info.get("model") or {}).get("id", "unknown") if isinstance(info.get("model"), dict) else (info.get("model") or "unknown")
+    cost = info.get("cost", 0) or 0.0
+
     lines = []
+    lines.append(f"# Evaluation Log: {title}")
     lines.append(
-        f"# Evaluation Log: {data.get('info', {}).get('title', 'Session')}"
-    )
-    lines.append(
-        f"**Target Model:** {data.get('info', {}).get('model', {}).get('id')} | **Total Cost:** ${data.get('info', {}).get('cost', 0):.4f}\n---"
+        f"**Session ID:** `{session_id}` | **Target Model:** {model_id} | **Total Cost:** ${cost:.4f}\n---"
     )
 
-    for i, msg in enumerate(data.get("messages", [])):
-        role = msg.get("info", {}).get("role", "unknown").upper()
-        lines.append(f"\n## Turn {i+1} [{role}]")
+    turn_idx = 0
+    for msg in data.get("messages", []):
+        # 1. Determine role: v1 uses msg["info"]["role"], v2 uses msg["type"]
+        role = msg.get("info", {}).get("role")
+        if not role:
+            role = msg.get("type", "unknown")
+        role = str(role).upper()
 
-        for part in msg.get("parts", []):
+        # 2. Extract parts: v1 uses msg["parts"], v2 uses msg["content"], msg["text"], or msg["summary"]
+        parts = []
+        if isinstance(msg.get("parts"), list) and msg["parts"]:
+            parts = msg["parts"]
+        elif isinstance(msg.get("content"), list) and msg["content"]:
+            parts = msg["content"]
+        elif msg.get("text"):
+            parts = [{"type": "text", "text": msg["text"]}]
+        elif msg.get("summary"):
+            parts = [{"type": "summary", "text": msg["summary"]}]
+
+        # Skip events that have no renderable message or parts (e.g. idle, model-switched, agent-switched)
+        if not parts:
+            continue
+
+        turn_idx += 1
+        lines.append(f"\n## Turn {turn_idx} [{role}]")
+
+        for part in parts:
             p_type = part.get("type")
 
-            # 1. Capture model thoughts
+            # 1. Capture model thoughts / reasoning
             if p_type == "reasoning" and part.get("text"):
                 lines.append(f"\n> **Model Thought/Plan:**\n> {part['text']}\n")
 
-            # 2. Capture regular conversational text
-            elif p_type == "text" and part.get("text"):
-                lines.append(f"\n**Message:**\n{part['text']}\n")
+            # 2. Capture regular conversational text or compaction summary
+            elif p_type in ("text", "summary") and part.get("text"):
+                label = "Compaction Summary" if p_type == "summary" else "Message"
+                lines.append(f"\n**{label}:**\n{part['text']}\n")
 
             # 3. Capture tool invocations & outputs
             elif p_type == "tool":
-                tool_name = part.get("tool")
+                tool_name = part.get("tool") or part.get("name")
                 state = part.get("state", {})
                 inp = state.get("input", {})
-                out = str(state.get("output", ""))
+
+                # In v1: output is in state["output"]
+                # In v2: output can be in state["output"] or state["content"]
+                raw_out = state.get("output")
+                if raw_out is None and "content" in state:
+                    c = state.get("content")
+                    if isinstance(c, list):
+                        raw_out = "\n".join(
+                            b.get("text", "") for b in c if isinstance(b, dict) and b.get("text")
+                        )
+                    elif isinstance(c, str):
+                        raw_out = c
+                    else:
+                        raw_out = str(c) if c else ""
+                out = str(raw_out or "")
 
                 # Truncate tool input payloads (e.g. task prompts, apply_patch diffs, file writes)
                 should_truncate_input = True
@@ -96,13 +137,15 @@ def generate_review_transcript(
                 # Escape backticks so inline markdown code blocks don't break
                 inp_str = inp_str.replace("`", "'")
 
-                # Truncate massive tool outputs (like file dumps) to keep review compact
-                if tool_name != "task" and len(out) > max_output_length:
+                # Truncate massive tool outputs (like file dumps) to keep review compact.
+                # Preserve task and subagent outputs intact so that XML tags and session IDs are not clipped.
+                if tool_name not in ("task", "subagent") and len(out) > max_output_length:
                     out = out[:max_output_length] + "... [TRUNCATED FOR REVIEW]"
 
                 lines.append(f"\n* **Tool Executed:** `{tool_name}`")
                 lines.append(f"  * **Input:** `{inp_str}`")
-                lines.append(f"  * **Status:** `{state.get('status')}`")
+                if state.get("status"):
+                    lines.append(f"  * **Status:** `{state.get('status')}`")
                 lines.append(f"  * **Result Preview:**\n```text\n{out}\n```")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -15,8 +15,11 @@ def extract_task_ids(md_path: str | Path) -> list[str]:
 
     content = path.read_text(encoding="utf-8")
     
-    # Matches <task ... id="<ID>" ...> with double or single quotes
-    pattern = re.compile(r'<task\b[^>]*?\bid=["\']([^"\']+)["\']', re.IGNORECASE)
+    # Matches <task ... id="<ID>" ...> or <subagent ... sessionID="<ID>" ...> with double or single quotes
+    pattern = re.compile(
+        r'<(?:task|subagent)\b[^>]*?\b(?:id|sessionID|sessionId)=["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    )
     return pattern.findall(content)
 
 

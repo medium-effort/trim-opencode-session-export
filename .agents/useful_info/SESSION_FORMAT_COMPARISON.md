@@ -1,7 +1,7 @@
 # OpenCode Session JSON Format Comparison & Issue Analysis
 
 This document provides a detailed breakdown of the structural differences between:
-1. **CLI Export Format** (as seen in `opencode_export_format_example.json`, produced by `opencode export <session_id>`)
+1. **CLI Export Format** (as seen in `opencode_export_format_example.json`, produced by `opencode session export <session_id>` in v2.x+ or `opencode export <session_id>` in v1.x)
 2. **SQLite Database Export Format** (as seen in `session_ses_fd5f1699fffek6gGkSvq82SSB6.json`, exported directly from `opencode.db`)
 
 It also explains exactly why the current workspace processing scripts (`process_session.py`, `trimmer.py`, and `export_task_sessions.py`) fail when processing SQLite database exports.
